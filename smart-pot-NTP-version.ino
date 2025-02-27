@@ -23,6 +23,15 @@ const int lastResetTimeAddress = 4;
 bool ledState = false; // Track whether LED is on or off
 time_t lastResetTime;
 
+void flashLED(int times) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(ledPin, HIGH);
+    delay(200);
+    digitalWrite(ledPin, LOW);
+    delay(200);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   pinMode(ledPin, OUTPUT);
@@ -44,12 +53,18 @@ void setup() {
   }
   Serial.println("Connected to WiFi");
 
+  // Flash LED 3 times to confirm WiFi connection
+  flashLED(3);
+
   // Initialize NTP client
   timeClient.begin();
   timeClient.update();
 
   // Set the initial time
   setTime(timeClient.getEpochTime());
+
+  // Flash LED 3 times to confirm NTP synchronization
+  flashLED(3);
 
   // Update LED state based on saved state
   if (ledState) {
