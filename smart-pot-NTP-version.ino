@@ -10,7 +10,7 @@ const char* password = "your_PASSWORD";
 
 // NTP client setup
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", 0, 60000); // Update every 60 seconds
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 0, 300000); // Update every 5 minutes (300000 ms)
 
 // Pin definitions
 const int ledPin = 5;    // GPIO5 (D1 on the board)
@@ -77,8 +77,8 @@ void loop() {
   setTime(timeClient.getEpochTime());
   time_t currentTime = now();
 
-  // Check if it's 8 AM on Monday
-  if (weekday(currentTime) == 2 && hour(currentTime) == 8 && minute(currentTime) == 0 && second(currentTime) == 0) {
+  // Check if it's after 8 AM on Monday and the LED is not already on
+  if (weekday(currentTime) == 2 && hour(currentTime) >= 8 && !ledState) {
     digitalWrite(ledPin, HIGH);
     ledState = true; // Mark LED as ON
     EEPROM.write(ledStateAddress, ledState);
@@ -96,4 +96,7 @@ void loop() {
     EEPROM.commit();
     delay(200); // Debounce delay
   }
+
+  // Delay for 5 minutes (300000 ms) to reduce processor usage
+  delay(300000);
 }
