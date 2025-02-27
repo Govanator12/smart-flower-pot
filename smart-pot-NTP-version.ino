@@ -18,10 +18,10 @@ const int buttonPin = 4; // GPIO4 (D2 on the board)
 
 // EEPROM addresses
 const int ledStateAddress = 0;
-const int lastResetTimeAddress = 4;
 
 bool ledState = false; // Track whether LED is on or off
-time_t lastResetTime;
+unsigned long previousMillis = 0; // Store the last time the NTP update was checked
+const unsigned long interval = 300000; // Interval for NTP update (5 minutes)
 
 void flashLED(int times) {
   for (int i = 0; i < times; i++) {
@@ -43,7 +43,6 @@ void setup() {
 
   // Load saved state from EEPROM
   ledState = EEPROM.read(ledStateAddress);
-  EEPROM.get(lastResetTimeAddress, lastResetTime);
 
   // Connect to WiFi
   WiFi.begin(ssid, password);
@@ -73,30 +72,43 @@ void setup() {
 }
 
 void loop() {
-  timeClient.update();
-  setTime(timeClient.getEpochTime());
+  unsigned long currentMillis = millis();
+
+  // Check if it's time to update the NTP time
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis;
+    timeClient.update();
+    setTime(timeClient.getEpochTime());
+  }
+
   time_t currentTime = now();
+
+  // Print current time and button state for debugging
+  Serial.print("Current time: ");
+  Serial.println(currentTime);
+  Serial.print("Button state: ");
+  Serial.println(digitalRead(buttonPin));
+  Serial.print("LED state: ");
+  Serial.println(ledState);
 
   // Check if it's after 8 AM on Monday and the LED is not already on
   if (weekday(currentTime) == 2 && hour(currentTime) >= 8 && !ledState) {
     digitalWrite(ledPin, HIGH);
     ledState = true; // Mark LED as ON
     EEPROM.write(ledStateAddress, ledState);
-    EEPROM.put(lastResetTimeAddress, currentTime);
     EEPROM.commit();
+    Serial.println("LED turned ON");
   }
 
   // Reset timer only if LED is ON and button is pressed
-  if (ledState && digitalRead(buttonPin) == LOW) {
-    lastResetTime = currentTime;  // Reset timer
+  int buttonState = digitalRead(buttonPin);
+  if (ledState && buttonState == LOW) {
+    Serial.println("Button pressed, turning off LED");
     digitalWrite(ledPin, LOW); // Turn off LED
     ledState = false; // Mark LED as OFF
     EEPROM.write(ledStateAddress, ledState);
-    EEPROM.put(lastResetTimeAddress, lastResetTime);
     EEPROM.commit();
+    Serial.println("LED turned OFF by button press");
     delay(200); // Debounce delay
   }
-
-  // Delay for 5 minutes (300000 ms) to reduce processor usage
-  delay(300000);
 }
