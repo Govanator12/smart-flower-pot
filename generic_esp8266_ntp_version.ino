@@ -3,14 +3,12 @@
 #include <NTPClient.h>
 #include <TimeLib.h>
 #include <EEPROM.h>
-
-// WiFi credentials
-const char* ssid = "your_SSID";
-const char* password = "your_PASSWORD";
+#include "arduino_secrets.h" // Include the secrets file
 
 // NTP client setup
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", 0, 300000); // Update every 5 minutes (300000 ms)
+const long utcOffsetInSeconds = -5 * 3600; // EST (UTC-5 hours)
+NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds, 300000); // Update every 5 minutes (300000 ms)
 
 // Pin definitions
 const int ledPin = 5;    // GPIO5 (D1 on the board)
@@ -91,8 +89,8 @@ void loop() {
   Serial.print("LED state: ");
   Serial.println(ledState);
 
-  // Check if it's after 8 AM on Monday and the LED is not already on
-  if (weekday(currentTime) == 2 && hour(currentTime) >= 8 && !ledState) {
+  // Check if it's after 8:30 AM on Monday and the LED is not already on
+  if (weekday(currentTime) == 2 && hour(currentTime) >= 8 && minute(currentTime) >= 30 && !ledState) {
     digitalWrite(ledPin, HIGH);
     ledState = true; // Mark LED as ON
     EEPROM.write(ledStateAddress, ledState);
@@ -110,5 +108,9 @@ void loop() {
     EEPROM.commit();
     Serial.println("LED turned OFF by button press");
     delay(200); // Debounce delay
+    // Wait for button release
+    while (digitalRead(buttonPin) == LOW) {
+      delay(10);
+    }
   }
 }
