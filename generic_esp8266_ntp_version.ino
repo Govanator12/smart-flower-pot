@@ -1,128 +1,135 @@
 #include <ESP8266WiFi.h>
-#include <WiFiUdp.h>
-#include <NTPClient.h>
-#include <TimeLib.h>
-#include <EEPROM.h>
-#include "arduino_secrets.h" // Include the secrets file
+#include <time.h>
+#include "Arduino_secrets.h"  // Contains ssid and password
 
-// NTP client setup
-WiFiUDP ntpUDP;
-const long utcOffsetInSeconds = -5 * 3600; // EST (UTC-5 hours)
-NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds, 300000); // Update every 5 minutes (300000 ms)
+// Define pins using numeric GPIO values:
+// LED on GPIO5 (D1 on the board)
+// Button on GPIO4 (D2 on the board)
+const int ledPin = 5;    // GPIO5
+const int buttonPin = 4; // GPIO4
 
-// Pin definitions
-const int ledPin = 5;    // GPIO5 (D1 on the board)
-const int buttonPin = 4; // GPIO4 (D2 on the board)
+// Global state variables
+bool ledReminderOn = false;    // True when LED is on (reminder active)
+bool reminderTriggered = false; // True once this week's reminder has fired
+unsigned long lastButtonPressTime = 0; // For button debouncing
+const unsigned long debounceDelay = 50; // Debounce time in milliseconds
 
-// EEPROM addresses
-const int ledStateAddress = 0;
-const int buttonPressedAddress = 1;
-
-bool ledState = false; // Track whether LED is on or off
-bool buttonPressed = false; // Track whether the button was pressed to turn off the LED
-unsigned long previousMillis = 0; // Store the last time the NTP update was checked
-const unsigned long interval = 300000; // Interval for NTP update (5 minutes)
-
-void flashLED(int times) {
-  for (int i = 0; i < times; i++) {
+// Function to triple flash the LED upon successful WiFi connection
+void tripleFlashLED() {
+  Serial.println("Starting triple flash of LED for WiFi connection confirmation.");
+  for (int i = 0; i < 3; i++) {
+    Serial.printf("Flash %d: LED ON\n", i + 1);
     digitalWrite(ledPin, HIGH);
     delay(200);
     digitalWrite(ledPin, LOW);
+    Serial.printf("Flash %d: LED OFF\n", i + 1);
     delay(200);
   }
+  Serial.println("Triple flash complete.");
 }
 
 void setup() {
   Serial.begin(115200);
+  delay(10);
+
+  // Initialize LED and button pins.
   pinMode(ledPin, OUTPUT);
-  pinMode(buttonPin, INPUT_PULLUP); // Enable internal pull-up resistor
-  digitalWrite(ledPin, LOW); // Ensure LED starts off
+  pinMode(buttonPin, INPUT_PULLUP); // Button wired to ground when pressed
+  
+  // Ensure LED starts off.
+  digitalWrite(ledPin, LOW);
+  Serial.println("LED initialized to OFF.");
 
-  // Initialize EEPROM
-  EEPROM.begin(512);
-
-  // Load saved state from EEPROM
-  ledState = EEPROM.read(ledStateAddress);
-  buttonPressed = EEPROM.read(buttonPressedAddress);
-
-  // Connect to WiFi
+  // Connect to WiFi using credentials from Arduino_secrets.h.
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
   WiFi.begin(ssid, password);
+  
   while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.println("Connecting to WiFi...");
+    delay(500);
+    Serial.print(".");
   }
-  Serial.println("Connected to WiFi");
+  Serial.println("\nWiFi connected successfully!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+  
+  // Triple flash the LED to indicate a successful WiFi connection.
+  tripleFlashLED();
 
-  // Flash LED 3 times to confirm WiFi connection
-  flashLED(3);
-
-  // Initialize NTP client
-  timeClient.begin();
-  timeClient.update();
-
-  // Set the initial time
-  setTime(timeClient.getEpochTime());
-
-  // Flash LED 3 times to confirm NTP synchronization
-  flashLED(3);
-
-  // Update LED state based on saved state
-  if (ledState) {
-    digitalWrite(ledPin, HIGH);
+  // Configure time via NTP.
+  // Fixed EST: offset -5 hours (UTC-5) and DST offset 0.
+  Serial.println("Configuring time with NTP for fixed EST (UTC-5)...");
+  configTime(-5 * 3600, 0, "pool.ntp.org", "time.nist.gov");
+  
+  // Wait for time to be set.
+  time_t now = time(nullptr);
+  int retry = 0;
+  while (now < 8 * 3600 && retry < 10) { // if time isn't set (e.g., still near 1970)
+    delay(500);
+    now = time(nullptr);
+    retry++;
+    Serial.print("Waiting for time sync... Retry: ");
+    Serial.println(retry);
+  }
+  if (retry < 10) {
+    Serial.println("Time synchronized successfully.");
+  } else {
+    Serial.println("Time sync may have failed; check WiFi/NTP settings.");
   }
 }
 
 void loop() {
-  unsigned long currentMillis = millis();
-
-  // Check if it's time to update the NTP time
-  if (currentMillis - previousMillis >= interval) {
-    previousMillis = currentMillis;
-    timeClient.update();
-    setTime(timeClient.getEpochTime());
+  // Obtain the current time.
+  time_t now = time(nullptr);
+  struct tm *timeinfo = localtime(&now);
+  if (timeinfo == NULL) {
+    Serial.println("Error: Failed to obtain time.");
+    delay(1000);
+    return;
   }
-
-  time_t currentTime = now();
-
-  // Print current time and button state for debugging
+  
+  // Log the current time for troubleshooting.
   Serial.print("Current time: ");
-  Serial.println(currentTime);
-  Serial.print("Button state: ");
-  Serial.println(digitalRead(buttonPin));
-  Serial.print("LED state: ");
-  Serial.println(ledState);
+  Serial.print(asctime(timeinfo));  // asctime() returns a string that includes a newline
 
-  // Check if it's after 8:45 AM on Monday and the LED is not already on
-  if (weekday(currentTime) == 2 && hour(currentTime) >= 8 && minute(currentTime) >= 45 && !ledState && !buttonPressed) {
-    digitalWrite(ledPin, HIGH);
-    ledState = true; // Mark LED as ON
-    EEPROM.write(ledStateAddress, ledState);
-    EEPROM.commit();
-    Serial.println("LED turned ON");
+  // Check if today is Monday (tm_wday: 0=Sunday, 1=Monday, etc.).
+  if (timeinfo->tm_wday == 1) {
+    Serial.println("Today is Monday.");
+    // Trigger the reminder exactly at 10:38 AM EST if it hasn't already been triggered.
+    if (timeinfo->tm_hour == 10 && timeinfo->tm_min == 38 && !reminderTriggered) {
+      Serial.println("Trigger condition met: It is 10:38 AM on Monday.");
+      digitalWrite(ledPin, HIGH);  // Turn on the LED
+      ledReminderOn = true;
+      reminderTriggered = true;    // Mark that this week's reminder has fired
+      Serial.println("Reminder triggered: LED turned ON (time to water the plants)!");
+    } else {
+      Serial.print("Not trigger time or reminder already triggered (Hour: ");
+      Serial.print(timeinfo->tm_hour);
+      Serial.print(", Minute: ");
+      Serial.print(timeinfo->tm_min);
+      Serial.println(")");
+    }
+  } else {
+    // Reset reminder flag on any day other than Monday.
+    if (reminderTriggered) {
+      Serial.println("Resetting reminder flag (today is not Monday).");
+    }
+    reminderTriggered = false;
   }
-
-  // Reset timer only if LED is ON and button is pressed
+  
+  // Check the button (active LOW) with a simple debounce.
   int buttonState = digitalRead(buttonPin);
-  if (ledState && buttonState == LOW) {
-    Serial.println("Button pressed, turning off LED");
-    digitalWrite(ledPin, LOW); // Turn off LED
-    ledState = false; // Mark LED as OFF
-    buttonPressed = true; // Mark button as pressed
-    EEPROM.write(ledStateAddress, ledState);
-    EEPROM.write(buttonPressedAddress, buttonPressed);
-    EEPROM.commit();
-    Serial.println("LED turned OFF by button press");
-    delay(200); // Debounce delay
-    // Wait for button release
-    while (digitalRead(buttonPin) == LOW) {
-      delay(10);
+  Serial.print("Button state: ");
+  Serial.println(buttonState);
+  if (buttonState == LOW && ledReminderOn) {
+    if (millis() - lastButtonPressTime > debounceDelay) {
+      Serial.println("Button press detected: Turning LED OFF (plants watered).");
+      digitalWrite(ledPin, LOW); // Turn off the LED
+      ledReminderOn = false;
+      lastButtonPressTime = millis();  // Update debounce timer
     }
   }
-
-  // Reset buttonPressed flag at the start of a new week
-  if (weekday(currentTime) == 2 && hour(currentTime) == 0 && minute(currentTime) == 0) {
-    buttonPressed = false;
-    EEPROM.write(buttonPressedAddress, buttonPressed);
-    EEPROM.commit();
-  }
+  
+  // Wait a short while before checking again.
+  delay(1000);
 }
